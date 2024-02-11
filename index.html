@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html>
+
+<!--You can explore fonts.google.com and import fonts here, which can be used simply by setting the font-family css attribute-->
+<head>
+    <link rel="preconnect" href="https://fonts.googleapis.com"> 
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=Luckiest+Guy:ital,wght@0,300;0,400;0,700;1,300;1,400;1,700&display=swap" rel="stylesheet">
+</head>
+
+
+<!--Background color set to pure green so you can ChromaKey the window-->
+<body style="background-color:#00ff00">
+
+<!--This is where you put the audio file you want to play-->
+<audio id="sfx">
+    <source src="sfx/ff7fanfare.mp3">
+    Your browser does not support the audio element.
+</audio>
+
+<!--Test buttons. These can be commented out, or left in and just placed offscreen when adding the element in OBS/Streamlabs-->
+<button onclick=playAlert() id=testButton>Test Alert</button>
+<button onclick=authorizeGmail() id=authButton style="margin-bottom:100px">Authenticate</button>
+
+<!--Here are the visual elements of the alert: Not all of them are needed. Set the images/text in the playAlert() method-->
+<img id="alertGif" align="middle" style="margin-left:auto;margin-right:auto;display:block;" src=""/>
+<img id="alertTextImg" src=""/>
+<p id="alertTextText" style="font-family:'Luckiest Guy';font-size:225%;text-align:center;color:green;-webkit-text-stroke-width:2px;-webkit-text-stroke-color:yellow"></p>
+
+
+<script type="text/javascript">
+	//See https://developers.google.com/gmail/api/quickstart/js to set up a client_id and an API key.
+    const CLIENT_ID = "XXXXXXXXXXXX";
+    const API_KEY = "XXXXXXXXXXXXX";
+    const REDIRECT_URI = "http://127.0.0.1:8000/index.html";
+    const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
+    const SCOPES = "https://www.googleapis.com/auth/gmail.readonly";
+
+	const DEFAULT_ALERT_IMG = "images/heathcliff.png";
+	const DEFAULT_ALERT_MSG = "Someone made a purchase from your Etsy Store!";
+
+	const GMAIL_SUBJECT_STRING = "You made a sale on Etsy"; //only needs to be included in the subject, doesn't need to be the full subject.
+															//this gets pulled from the snippet field, so may include early parts of the message
+
+    let tokenClient;
+    let gapiInited = false;
+    let gisInited = false;
+	let initialAuthComplete = false;
+	
+	let lastTimestamp = Date.now();
+	
+    function gapiLoaded() {
+        gapi.load('client', initializeGapiClient);
+      }
+
+      /**
+       * Callback after the API client is loaded. Loads the
+       * discovery doc to initialize the API.
+       */
+      async function initializeGapiClient() {
+        await gapi.client.init({
+          apiKey: API_KEY,
+          discoveryDocs: [DISCOVERY_DOC],
+        });
+        gapiInited = true;
+        maybeAuthorize();
+
+      }
+
+      /**
+       * Callback after Google Identity Services are loaded.
+       */
+      function gisLoaded() {
+        tokenClient = google.accounts.oauth2.initTokenClient({
+          client_id: CLIENT_ID,
+          scope: SCOPES,
+          callback: '', // defined later
+        });
+        gisInited = true;
+        maybeAuthorize();
+      }
+
+      function maybeAuthorize()
+      {
+        if(gapiInited && gisInited)
+        {
+		  resetAlert();
+          authorizeGmail();
+        }
+      }
+
+      function authorizeGmail()
+      {
+	    console.log("AuthorizeGmail called");
+        tokenClient.callback = async (resp) => {
+          if (resp.error !== undefined) {
+            throw (resp);
+          }
+        };
+
+        if (gapi.client.getToken() === null) {
+          // Prompt the user to select a Google Account and ask for consent to share their data
+          // when establishing a new session.
+          tokenClient.requestAccessToken({prompt:'consent', access_type:'offline'});
+        } else {
+          // Skip display of account chooser and consent dialog for an existing session.
+          tokenClient.requestAccessToken({prompt:'none'});
+        }
+		initialAuthComplete = true;
+      }
+
+
+	//This command sets up the polling 
+    setInterval(CheckForEmails, 10000);
+
+    async function CheckForEmails()
+    {
+		console.log(`Pulling emails since ${lastTimestamp}`);
+			
+		
+		let response;
+        try 
+		{
+          response = await gapi.client.gmail.users.messages.list({
+            'userId': 'me',
+			'maxResults': 25,
+			//'q':`after:${lastTimestamp}`  //uncomment this to further filter results
+          });
+		  const messages = response.result.messages;
+          if (!messages || messages.length == 0) {
+            return;
+          }
+				
+		  let detailedMessages = [];
+		  
+		  for(const message of messages)
+		  {
+		    dm = await getDetailedMessages(message.id);
+			if(dm === null)
+			{
+			  return;
+			}
+			detailedMessages.push(dm);
+		  }
+		  
+		  detailedMessages.sort((a, b) => 
+		  {
+		    return Date.parse(a.result.payload.headers.find((entry) => entry.name == "Date").value) - Date.parse(b.result.payload.headers.find((entry) => entry.name == "Date").value);
+		  });
+		  
+		  
+		  detailedMessages.forEach((message) => 
+		  { 
+		    CheckIfEmailIsTransaction(message);
+	      });
+        } 
+		catch (err) 
+		{
+			console.log("ERROR");
+			console.log(err);
+			if(initialAuthComplete)
+			{
+			  authorizeGmail();
+			}
+		}
+		
+    }
+	
+	async function getDetailedMessages(messageId)
+	{
+	  let response;
+	  try
+	  {
+	    response = await gapi.client.gmail.users.messages.get({
+		  'userId':'me',
+		  'id': messageId,
+		  'format':'full'
+		});
+	  }
+	  catch (err) 
+	  {
+		return null;
+	  }
+	  
+	  console.log(response);
+	  return response;
+	}
+	
+	async function CheckIfEmailIsTransaction(message)
+	{	  
+	  let headers = message.result.payload.headers;	  
+	  let dateSent = Date.parse(headers.find((entry) => entry.name == "Date").value);
+	  console.log(`Checking email with subject ${headers.find((entry) => entry.name == "Subject").value}`);
+	  
+	  let msgBody = atob(message.result.payload.parts[0].body.data.replace(/-/g, '+').replace(/_/g, '/'));
+	  if( dateSent > lastTimestamp )
+	  {
+	    console.log(`Found a new email: ${headers.find((entry) => entry.name == "Subject").value}`);
+		if(headers.find((entry) => entry.name == "Subject").value.includes(GMAIL_SUBJECT_STRING))
+	    {
+		  lastTimestamp = Date.now();
+		  let imgUrl = DEFAULT_ALERT_IMG;
+
+		  //Here you can change what image you want to use for your alert by seeing if a string exists in the body of the email
+		  //Note: if the body matches multiple of the below if statements, it will use whichever if statement it passes first, so order them accordingly, and filter specifically.
+		  /**
+		  if (msgBody.includes("Button"))
+		  {
+		    playAlert("images/button.jpg");
+			return;
+		  }
+		  if(msgBody.includes("Pin"))
+		  {
+		    playAlert("images/pin.jpg");
+			return;
+		  }
+		  if(msgBody.includes("Poster"))
+		  {
+		    playAlert("images/poster.jpg");
+			return;
+		  }
+		  */
+		  playAlert(imgUrl);
+	    }
+	  }
+	}
+	
+    function playAlert(imgUrl)
+    {
+	    if(imgUrl === null)
+		{
+		   imgUrl = DEFAULT_ALERT_IMG;
+		}
+        document.getElementById("alertGif").src = imgUrl;
+        //document.getElementById("alertTextImg").src = "AlertText.gif"; //if using the alertText element, which is meant to be an image of text
+		document.getElementById("alertTextText").innerText = DEFAULT_ALERT_MSG;
+		try
+		{
+        document.getElementById("sfx").play();
+		} catch(err) {}
+
+        setTimeout(resetAlert, 8000)
+    }
+
+    function resetAlert()
+    {
+        //document.getElementById("alertTextImg").setAttribute('src', '');
+        document.getElementById("alertTextText").innerText = "";
+        document.getElementById("alertGif").setAttribute('src', '');
+    }
+
+</script>
+<script async defer src="https://apis.google.com/js/api.js" onload="gapiLoaded()"></script>
+<script async defer src="https://accounts.google.com/gsi/client" onload="gisLoaded()"></script>
+</body>
+</html>
