@@ -1,4 +1,4 @@
-# CustomStreamlabsWebsite
+# CustomStreamlabsAlertWebsite
 A local website that allows you to input an image/gif, a sound effect, text, and play an alert. Currently configured to trigger upon receiving a mail from gmail, but can be adjusted to be triggered by polling any API
 
 See https://developers.google.com/gmail/api/quickstart/js to set this up with your own ClientID's and API Keys. You won't need to be approved by google or anything, and its free to set
